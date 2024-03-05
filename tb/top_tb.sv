@@ -100,12 +100,14 @@ module top_tb;
     int     tr_len;
     bit     read_after_full;
     bit     read_after_write;
+    bit     write_after_read;
 
     function new( input conf_t rd_conf,
                   input conf_t wr_conf,
                   input conf_t len_conf,
                   input bit    read_after_full  = 1'b0,
-                  input bit    read_after_write = 1'b0
+                  input bit    read_after_write = 1'b0,
+                  input bit    write_after_read = 1'b0
                 );
 
       this.wr_conf          = wr_conf;
@@ -113,6 +115,7 @@ module top_tb;
       this.len_conf         = len_conf;
       this.read_after_full  = read_after_full;
       this.read_after_write = read_after_write;
+      this.write_after_read = write_after_read;
       
       this.data             = {};
       this.rd_delays        = {};
@@ -300,6 +303,12 @@ module top_tb;
 
     task write( input Transaction tr_to_send );
 
+      if ( tr_to_send.write_after_read )
+        begin
+          @( negedge rdreq );
+          ##1;
+        end
+
       while ( tr_to_send.wr_delays.size() )
         begin
           wrreq = 1'b1;
@@ -480,6 +489,9 @@ module top_tb;
 
       tr = new( RD_WONE_DELAY, WR_WONE_DELAY, TR_OF_MAX_LENGTH );
       this.generated_transactions.put(tr);  
+
+      tr = new( RD_WOUT_DELAY, WR_WOUT_DELAY, TR_OF_ONE_LENGTH, .write_after_read(1'b1) );
+      this.generated_transactions.put(tr); 
 
       // tr = new( RD_WOUT_DELAY, WR_WRND_DELAY, TR_OF_MAX_LENGTH );
       // this.generated_transactions.put(tr);
