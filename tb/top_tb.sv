@@ -237,6 +237,13 @@ module top_tb;
       $display( "Time of transaction start: %d", $time() );
       $display( "Read configuration: %d. Write configuration: %d", rd_conf.name(), wr_conf.name() );
       $display( "Transaction length: %d", tr_len );
+      
+      if ( this.read_after_full )
+        $display( "Read after full configuration" );
+      if ( this.read_after_write )
+        $display( "Read after write configuration" );
+      if ( this.write_after_read )
+        $display( "Write after read configuration" );
 
       $display("\n");
 
@@ -269,6 +276,7 @@ module top_tb;
           tr_to_send.print();
 
           ->transaction_started;
+          ##3;
 
           fork
             write(tr_to_send);
@@ -437,6 +445,11 @@ module top_tb;
           ##1;
           wait ( transaction_started.triggered )
             begin
+              srst          = 1'b1;
+              ##2;
+              srst          = 1'b0;
+              ref_ptr       = 0;
+              ref_mem       = '0;
               usedw_err_cnt = ERROR_LIMITS_USEDW;
               empty_err_cnt = ERROR_LIMITS_EMPTY;
               full_err_cnt  = ERROR_LIMITS_FULL;
