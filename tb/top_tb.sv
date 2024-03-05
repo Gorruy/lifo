@@ -12,10 +12,10 @@ module top_tb;
   parameter ALMOST_EMPTY        = 2;
 
   parameter ERROR_LIMITS_USEDW  = 1;
-  parameter ERROR_LIMITS_EMPTY  = 2;
+  parameter ERROR_LIMITS_EMPTY  = 10;
   parameter ERROR_LIMITS_FULL   = 1;
-  parameter ERROR_LIMITS_ALMF   = 1;
-  parameter ERROR_LIMITS_ALME   = 1;
+  parameter ERROR_LIMITS_ALMF   = 5;
+  parameter ERROR_LIMITS_ALME   = 5;
   parameter ERROR_LIMITS_READ   = 10;
 
   bit                  clk;
@@ -393,44 +393,51 @@ module top_tb;
 
           if ( vif.usedw !== ref_ptr && usedw_err_cnt > 0 )
             begin
-              raise_error("Usedw error");
+              $error("Usedw error, usedw:%d, ref_ptr:%d", vif.usedw, ref_ptr);
               usedw_err_cnt -= 1;
             end
           if ( ref_ptr === 0 && vif.empty !== 1'b1 && empty_err_cnt > 0 )
             begin
-              raise_error("Empty error");
+              $error("Empty error");
               empty_err_cnt -= 1;
             end
           if ( ref_ptr === (AWIDTH + 1)'(2**AWIDTH) && vif.full !== 1'b1 && full_err_cnt > 0 )
             begin
-              raise_error("Full error");
+              $error("Full error");
               full_err_cnt -= 1;
             end
-          if ( ref_ptr <= ALMOST_EMPTY && vif.almost_empty !== 1'b1 && almf_err_cnt > 0 )
+          if ( ( ref_ptr <= ALMOST_EMPTY && vif.almost_empty !== 1'b1 || 
+                 ref_ptr > ALMOST_EMPTY && vif.almost_empty === 1'b1 ) && alme_err_cnt > 0 )
             begin
-              raise_error("Almost empty error");
-              almf_err_cnt -= 1;
-            end
-          if ( ref_ptr >= ALMOST_FULL && vif.almost_full !== 1'b1 && alme_err_cnt > 0 )
-            begin
-              raise_error("Almost full error");
+              $error("Almost empty error");
               alme_err_cnt -= 1;
+            end
+          if ( ( ref_ptr >= ALMOST_FULL && vif.almost_full !== 1'b1 ||
+                 ref_ptr < ALMOST_FULL && vif.almost_full === 1'b1 ) && almf_err_cnt > 0 )
+            begin
+              $error("Almost full error");
+              almf_err_cnt -= 1;
             end
           if ( reading_delay )
             begin
               if ( exp_q !== vif.q && read_err_cnt > 0 )
                 begin
-                  raise_error("Wrong read");
-                  $display("expected value:%d, real value:%d, index:%d", ref_mem[ref_ptr], vif.q, ref_ptr);
+                  $error("Wrong read");
+                  $display("expected value:%d, real value:%d, index:%d", exp_q, vif.q, ref_ptr);
                   read_err_cnt -= 1;
                 end
             end
 
-          // Assuming that case where both rdreq and wrreq driven high and 
-          // lifo is full being solved this way:
-          // at first we read from memory last word, 
-          // and then we write to memory at decremented address
-          if ( vif.rdreq === 1'b1 && ref_ptr > 0 )
+          // Assume that lifo drops all wrreq to full queue and
+          // rdreq to empty queue, even if oposite request is
+          // driven high at same clk cycle
+          if ( vif.wrreq === 1'b1 && ref_ptr != 2**AWIDTH )
+            begin
+              ref_mem[ref_ptr] = vif.data;
+              ref_ptr         += 1;
+            end  
+
+          if ( vif.rdreq === 1'b1 && ref_ptr > 0 && !( vif.wrreq === 1'b1 && ref_ptr == 1 ) )
             begin
               ref_ptr       -= 1; 
               exp_q          = ref_mem[ref_ptr];
@@ -438,13 +445,6 @@ module top_tb;
             end 
           else 
             reading_delay = 1'b0;
-
-          if ( vif.wrreq === 1'b1 && ref_ptr != 2**AWIDTH )
-            begin
-              ref_mem[ref_ptr] = vif.data;
-              ref_ptr         += 1;
-              reading_delay    = 1'b0;
-            end  
         end
 
     endtask
@@ -470,10 +470,6 @@ module top_tb;
         end
 
     endtask
-
-    function void raise_error( string error_message );
-      $error("time:%d, error type:%s", $time(), error_message);
-    endfunction 
 
   endclass
 
