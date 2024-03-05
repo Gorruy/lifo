@@ -1,6 +1,4 @@
 Найденные ошибки:
-
-### Следующие две ошибки связаны с проблемами сброса :
 1. После сброса сигнал empty_o держится на низком логическом уровне,
 Данная ошибка обнаруживается со следующим сообщением:
 
@@ -18,7 +16,7 @@ Time: 45 ps  Scope: top_tb.Monitor.raise_error File: top_tb.sv Line: 443`
 `Error: time:                2605, error type:Usedw error
 Time: 2605 ps  Scope: top_tb.Monitor.raise_error File: top_tb.sv Line: 443`
 
-### Следующие две ошибки взаимосвязаны, веорятно происходит переполнение адреса записи и старые значения затираются
+### Следующие четыре ошибки взаимосвязаны, веорятно происходит переполнение адреса записи и старые значения затираются
 4. Сигнал full не появляется после записи последнего слова в очередь, если за такт до него был сигнал read, текст:
 
 `Error: time:                2605, error type:Usedw error
@@ -29,3 +27,11 @@ Time: 2605 ps  Scope: top_tb.Monitor.raise_error File: top_tb.sv Line: 443`
 `Error: time:                7175, error type:Wrong read
 Time: 7175 ps  Scope: top_tb.Monitor.raise_error File: top_tb.sv Line: 443'
 'expected value:22254, real value:58903, index:        254`
+
+6. /7 Очередь не опустошается, когда должна:
+
+`Error: time:               12215, error type:Almost empty error
+Time: 12215 ps  Scope: top_tb.Monitor.raise_error File: top_tb.sv Line: 443`
+
+`Error: time:               12255, error type:Empty error
+Time: 12255 ps  Scope: top_tb.Monitor.raise_error File: top_tb.sv Line: 443`
