@@ -145,7 +145,7 @@ module top_tb;
         end
 
         TR_OF_EXC_LENGTH: begin
-          this.tr_len = $urandom_range( 2**AWIDTH * TR_OVERHEAD, 2**AWIDTH );
+          this.tr_len = 2**AWIDTH * TR_OVERHEAD;
         end
 
         TR_OF_RND_LENGTH: begin
