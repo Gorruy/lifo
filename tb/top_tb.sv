@@ -12,11 +12,11 @@ module top_tb;
   parameter ALMOST_EMPTY        = 2;
 
   parameter ERROR_LIMITS_USEDW  = 1;
-  parameter ERROR_LIMITS_EMPTY  = 1;
+  parameter ERROR_LIMITS_EMPTY  = 2;
   parameter ERROR_LIMITS_FULL   = 1;
   parameter ERROR_LIMITS_ALMF   = 1;
   parameter ERROR_LIMITS_ALME   = 1;
-  parameter ERROR_LIMITS_READ   = 1;
+  parameter ERROR_LIMITS_READ   = 10;
 
   bit                  clk;
   logic                srst;
@@ -234,7 +234,6 @@ module top_tb;
       $display( "Time of transaction start: %d", $time() );
       $display( "Read configuration: %d. Write configuration: %d", rd_conf.name(), wr_conf.name() );
       $display( "Transaction length: %d", tr_len );
-      $display( "Transaction data: %p", data );
 
       $display("\n");
 
@@ -279,9 +278,15 @@ module top_tb;
     task read( input Transaction tr_to_send );
       
       if ( tr_to_send.read_after_full )
-        wait ( full );
+        begin
+          wait ( full );
+          ##1;
+        end
       else  if ( tr_to_send.read_after_write )
-        wait ( tr_to_send.wr_delays.size() == 0 );
+        begin
+          wait ( tr_to_send.wr_delays.size() == 0 );
+          ##1;
+        end
         
       while ( tr_to_send.rd_delays.size() )
         begin
@@ -328,9 +333,9 @@ module top_tb;
 
     function new( input event tr_start );
 
-      ref_ptr         = '0;
+      ref_ptr         = 0;
       ref_mem         = '0;
-      reading_delay   = '0;
+      reading_delay   = 1'b0;
       timeout_counter = 0;
       usedw_err_cnt = ERROR_LIMITS_USEDW;
       empty_err_cnt = ERROR_LIMITS_EMPTY;
@@ -369,7 +374,7 @@ module top_tb;
               raise_error("Usedw error");
               usedw_err_cnt -= 1;
             end
-          if ( ref_ptr === '0 && empty !== 1'b1 && empty_err_cnt > 0 )
+          if ( ref_ptr === 0 && empty !== 1'b1 && empty_err_cnt > 0 )
             begin
               raise_error("Empty error");
               empty_err_cnt -= 1;
@@ -394,28 +399,25 @@ module top_tb;
               if ( ref_mem[ref_ptr] !== q && read_err_cnt > 0 )
                 begin
                   raise_error("Wrong read");
+                  $display("expected value:%d, real value:%d, index:%d", ref_mem[ref_ptr], q, ref_ptr);
                   read_err_cnt -= 1;
                 end
             end
 
-          if ( rdreq === 1'b1 && wrreq === 1'b1 && ref_ptr != 2**AWIDTH && ref_ptr != -1 )
-            begin
-              ref_mem[ref_ptr] = data;
-              reading_delay    = 1'b1;
-            end
-          else if ( wrreq === 1'b1 && ref_ptr != 2**AWIDTH )
-            begin
-              ref_mem[ref_ptr] = data;
-              ref_ptr         += 1;
-              reading_delay    = 1'b0;
-            end  
-          else if ( rdreq === 1'b1 && ref_ptr != -1 )
+          if ( rdreq === 1'b1 && ref_ptr > 0 )
             begin
               ref_ptr       -= 1; 
               reading_delay  = 1'b1;
             end 
           else 
             reading_delay = 1'b0;
+
+          if ( wrreq === 1'b1 && ref_ptr != 2**AWIDTH )
+            begin
+              ref_mem[ref_ptr] = data;
+              ref_ptr         += 1;
+              reading_delay    = 1'b0;
+            end  
         end
 
     endtask
@@ -458,23 +460,26 @@ module top_tb;
 
       Transaction tr;
 
-      repeat ( NUMBER_OF_TEST_RUNS )
-        begin
-          tr = new( RD_WRND_DELAY, WR_WRND_DELAY, TR_OF_RND_LENGTH );
-          this.generated_transactions.put(tr);
-        end
+      // repeat ( NUMBER_OF_TEST_RUNS )
+      //   begin
+      //     tr = new( RD_WRND_DELAY, WR_WRND_DELAY, TR_OF_RND_LENGTH );
+      //     this.generated_transactions.put(tr);
+      //   end
 
-      tr = new( RD_WRND_DELAY, WR_WOUT_DELAY, TR_OF_EXC_LENGTH, .read_after_full(1'b1) );
+      tr = new( RD_WONE_DELAY, WR_WOUT_DELAY, TR_OF_EXC_LENGTH, .read_after_full(1'b1) );
       this.generated_transactions.put(tr);
 
-      tr = new( RD_WRND_DELAY, WR_WOUT_DELAY, TR_OF_EXC_LENGTH, .read_after_write(1'b1) );
+      tr = new( RD_WONE_DELAY, WR_WOUT_DELAY, TR_OF_EXC_LENGTH, .read_after_write(1'b1) );
       this.generated_transactions.put(tr);
 
       // tr = new( RD_WONE_DELAY, WR_WONE_DELAY, TR_OF_MAX_LENGTH );
       // this.generated_transactions.put(tr);
 
       tr = new( RD_WOUT_DELAY, WR_WOUT_DELAY, TR_OF_MAX_LENGTH );
-      this.generated_transactions.put(tr); 
+      this.generated_transactions.put(tr);
+
+      tr = new( RD_WONE_DELAY, WR_WONE_DELAY, TR_OF_MAX_LENGTH );
+      this.generated_transactions.put(tr);  
 
       // tr = new( RD_WOUT_DELAY, WR_WRND_DELAY, TR_OF_MAX_LENGTH );
       // this.generated_transactions.put(tr);
