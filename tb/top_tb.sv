@@ -19,21 +19,35 @@ module top_tb;
   parameter ERROR_LIMITS_READ   = 10;
 
   bit                  clk;
-  logic                srst;
-
-  logic [DWIDTH - 1:0] data;
-  logic                wrreq;
-  logic                rdreq;
-
-  logic [DWIDTH - 1:0] q;
-  logic                empty;
-  logic                full;
-  logic [AWIDTH:0]     usedw;
-  logic                almost_full;
-  logic                almost_empty;
-
   bit                  srst_done;
 
+  lifo_interface #(
+    .DWIDTH         ( DWIDTH       ),          
+    .AWIDTH         ( AWIDTH       ),            
+    .ALMOST_FULL    ( ALMOST_FULL  ), 
+    .ALMOST_EMPTY   ( ALMOST_EMPTY )
+  ) lifo_if ( 
+    .clk            ( clk          ) 
+  );
+
+    lifo #(
+    .DWIDTH         ( DWIDTH               ),          
+    .AWIDTH         ( AWIDTH               ),            
+    .ALMOST_FULL    ( ALMOST_FULL          ), 
+    .ALMOST_EMPTY   ( ALMOST_EMPTY         )
+  ) lifo_inst (
+    .clk_i          ( lifo_if.clk          ),
+    .srst_i         ( lifo_if.srst         ),
+    .data_i         ( lifo_if.data         ),
+    .wrreq_i        ( lifo_if.wrreq        ),
+    .rdreq_i        ( lifo_if.rdreq        ),
+    .q_o            ( lifo_if.q            ),
+    .empty_o        ( lifo_if.empty        ),
+    .full_o         ( lifo_if.full         ),
+    .usedw_o        ( lifo_if.usedw        ),
+    .almost_full_o  ( lifo_if.almost_full  ),
+    .almost_empty_o ( lifo_if.almost_empty ) 
+  );
 
   initial forever #5 clk = !clk;
 
@@ -42,32 +56,14 @@ module top_tb;
 
   initial 
     begin
-      srst      <= 1'b0;
+      lifo_if.srst <= 1'b0;
       ##1;
-      srst      <= 1'b1;
+      lifo_if.srst <= 1'b1;
       ##1;
-      srst      <= 1'b0;
-      srst_done <= 1'b1;
+      lifo_if.srst <= 1'b0;
+      srst_done       <= 1'b1;
     end      
 
-  lifo #(
-    .DWIDTH         ( DWIDTH       ),          
-    .AWIDTH         ( AWIDTH       ),            
-    .ALMOST_FULL    ( ALMOST_FULL  ), 
-    .ALMOST_EMPTY   ( ALMOST_EMPTY )
-  ) lifo_inst (
-    .clk_i          ( clk          ),
-    .srst_i         ( srst         ),
-    .data_i         ( data         ),
-    .wrreq_i        ( wrreq        ),
-    .rdreq_i        ( rdreq        ),
-    .q_o            ( q            ),
-    .empty_o        ( empty        ),
-    .full_o         ( full         ),
-    .usedw_o        ( usedw        ),
-    .almost_full_o  ( almost_full  ),
-    .almost_empty_o ( almost_empty ) 
-  );
 
   typedef logic [DWIDTH - 1:0] data_t[$];
   typedef int                  delay_t[$];
@@ -87,7 +83,7 @@ module top_tb;
 
   class Transaction;
   // This class represents whole transaction:
-  // data in it, delays between requests and flag
+  // data in it, delays between requests and flags
   // that tells driver if we should make lifo full before start reading or
   // write over limits and only then start reading
     
@@ -256,13 +252,17 @@ module top_tb;
   // and writing commands to DUT
     mailbox #( Transaction ) generated_transactions;
     event                    transaction_started;
+
+    virtual lifo_interface   vif;
     
-    function new ( input mailbox #( Transaction ) generated_transactions,
-                   input event                    tr_started
+    function new ( input mailbox #( Transaction ) gen_trs,
+                   input event                    tr_started,
+                   input virtual lifo_interface   dut_interface
                  );
 
-      this.generated_transactions = generated_transactions;
-      transaction_started         = tr_started;
+      generated_transactions = gen_trs;
+      transaction_started    = tr_started;
+      vif                    = dut_interface;
 
     endfunction
 
@@ -290,7 +290,7 @@ module top_tb;
       
       if ( tr_to_send.read_after_full )
         begin
-          wait ( full );
+          wait ( vif.full );
           ##1;
         end
       else  if ( tr_to_send.read_after_write )
@@ -301,9 +301,9 @@ module top_tb;
         
       while ( tr_to_send.rd_delays.size() )
         begin
-          rdreq = 1'b1;
+          vif.rdreq = 1'b1;
           ##1;
-          rdreq = 1'b0;
+          vif.rdreq = 1'b0;
           ##(tr_to_send.rd_delays.pop_back() );
         end
 
@@ -313,16 +313,16 @@ module top_tb;
 
       if ( tr_to_send.write_after_read )
         begin
-          @( negedge rdreq );
+          @( negedge vif.rdreq );
           ##1;
         end
 
       while ( tr_to_send.wr_delays.size() )
         begin
-          wrreq = 1'b1;
-          data  = tr_to_send.data.pop_back();
+          vif.wrreq = 1'b1;
+          vif.data  = tr_to_send.data.pop_back();
           ##1;
-          wrreq = 1'b0;
+          vif.wrreq = 1'b0;
           ##(tr_to_send.wr_delays.pop_back());
         end
       
@@ -339,6 +339,8 @@ module top_tb;
     bit                                   reading_delay;      // valid data appeares at q with delay of 1 clk cycle
     int                                   timeout_counter;
     event                                 transaction_started;
+    logic [DWIDTH - 1:0]                  exp_q;
+    virtual lifo_interface                vif;
 
     // These counters will restrict number of error risings
     int usedw_err_cnt;
@@ -348,18 +350,21 @@ module top_tb;
     int alme_err_cnt;
     int read_err_cnt;
 
-    function new( input event tr_start );
+    function new( input event                 tr_start,
+                  input virtual lifo_interface dut_interface
+                );
 
+      vif             = dut_interface;
       ref_ptr         = 0;
       ref_mem         = '0;
       reading_delay   = 1'b0;
       timeout_counter = 0;
-      usedw_err_cnt = ERROR_LIMITS_USEDW;
-      empty_err_cnt = ERROR_LIMITS_EMPTY;
-      full_err_cnt  = ERROR_LIMITS_FULL;
-      almf_err_cnt  = ERROR_LIMITS_ALMF;
-      alme_err_cnt  = ERROR_LIMITS_ALME;
-      read_err_cnt  = ERROR_LIMITS_READ;
+      usedw_err_cnt   = ERROR_LIMITS_USEDW;
+      empty_err_cnt   = ERROR_LIMITS_EMPTY;
+      full_err_cnt    = ERROR_LIMITS_FULL;
+      almf_err_cnt    = ERROR_LIMITS_ALMF;
+      alme_err_cnt    = ERROR_LIMITS_ALME;
+      read_err_cnt    = ERROR_LIMITS_READ;
 
       transaction_started = tr_start;
 
@@ -381,57 +386,62 @@ module top_tb;
           @( posedge clk );
           timeout_counter += 1;
 
-          if ( rdreq === 1'b1 || wrreq === 1'b1 )
+          if ( vif.rdreq === 1'b1 || vif.wrreq === 1'b1 )
             timeout_counter = 0;
           else if ( timeout_counter == TIMEOUT + 1 )
             $stop();
 
-          if ( usedw !== ref_ptr && usedw_err_cnt > 0 )
+          if ( vif.usedw !== ref_ptr && usedw_err_cnt > 0 )
             begin
               raise_error("Usedw error");
               usedw_err_cnt -= 1;
             end
-          if ( ref_ptr === 0 && empty !== 1'b1 && empty_err_cnt > 0 )
+          if ( ref_ptr === 0 && vif.empty !== 1'b1 && empty_err_cnt > 0 )
             begin
               raise_error("Empty error");
               empty_err_cnt -= 1;
             end
-          if ( ref_ptr === (AWIDTH + 1)'(2**AWIDTH) && full !== 1'b1 && full_err_cnt > 0 )
+          if ( ref_ptr === (AWIDTH + 1)'(2**AWIDTH) && vif.full !== 1'b1 && full_err_cnt > 0 )
             begin
               raise_error("Full error");
               full_err_cnt -= 1;
             end
-          if ( ref_ptr <= ALMOST_EMPTY && almost_empty !== 1'b1 && almf_err_cnt > 0 )
+          if ( ref_ptr <= ALMOST_EMPTY && vif.almost_empty !== 1'b1 && almf_err_cnt > 0 )
             begin
               raise_error("Almost empty error");
               almf_err_cnt -= 1;
             end
-          if ( ref_ptr >= ALMOST_FULL && almost_full !== 1'b1 && alme_err_cnt > 0 )
+          if ( ref_ptr >= ALMOST_FULL && vif.almost_full !== 1'b1 && alme_err_cnt > 0 )
             begin
               raise_error("Almost full error");
               alme_err_cnt -= 1;
             end
           if ( reading_delay )
             begin
-              if ( ref_mem[ref_ptr] !== q && read_err_cnt > 0 )
+              if ( exp_q !== vif.q && read_err_cnt > 0 )
                 begin
                   raise_error("Wrong read");
-                  $display("expected value:%d, real value:%d, index:%d", ref_mem[ref_ptr], q, ref_ptr);
+                  $display("expected value:%d, real value:%d, index:%d", ref_mem[ref_ptr], vif.q, ref_ptr);
                   read_err_cnt -= 1;
                 end
             end
 
-          if ( rdreq === 1'b1 && ref_ptr > 0 )
+          // Assuming that case where both rdreq and wrreq driven high and 
+          // lifo is full being solved this way:
+          // at first we read from memory last word, 
+          // and then we write to memory at decremented address
+          if ( vif.rdreq === 1'b1 && ref_ptr > 0 )
             begin
               ref_ptr       -= 1; 
+              exp_q          = ref_mem[ref_ptr];
               reading_delay  = 1'b1;
             end 
           else 
             reading_delay = 1'b0;
 
-          if ( wrreq === 1'b1 && ref_ptr != 2**AWIDTH )
+          if ( vif.wrreq === 1'b1 && ref_ptr != 2**AWIDTH )
             begin
-              ref_mem[ref_ptr] = data;
+              ref_mem[ref_ptr] = vif.data;
               ref_ptr         += 1;
               reading_delay    = 1'b0;
             end  
@@ -445,9 +455,9 @@ module top_tb;
           ##1;
           wait ( transaction_started.triggered )
             begin
-              srst          = 1'b1;
+              vif.srst      = 1'b1;
               ##2;
-              srst          = 1'b0;
+              vif.srst      = 1'b0;
               ref_ptr       = 0;
               ref_mem       = '0;
               usedw_err_cnt = ERROR_LIMITS_USEDW;
@@ -472,9 +482,9 @@ module top_tb;
 
     mailbox #( Transaction ) generated_transactions;
 
-    function new( input mailbox #( Transaction ) generated_transactions );
+    function new( input mailbox #( Transaction ) gen_tr );
       
-      this.generated_transactions = generated_transactions;
+      generated_transactions = gen_tr;
 
     endfunction
 
@@ -485,35 +495,35 @@ module top_tb;
       // repeat ( NUMBER_OF_TEST_RUNS )
       //   begin
       //     tr = new( RD_WRND_DELAY, WR_WRND_DELAY, TR_OF_RND_LENGTH );
-      //     this.generated_transactions.put(tr);
+      //     generated_transactions.put(tr);
       //   end
 
       tr = new( RD_WONE_DELAY, WR_WOUT_DELAY, TR_OF_EXC_LENGTH, .read_after_full(1'b1) );
-      this.generated_transactions.put(tr);
+      generated_transactions.put(tr);
 
       tr = new( RD_WONE_DELAY, WR_WOUT_DELAY, TR_OF_EXC_LENGTH, .read_after_write(1'b1) );
-      this.generated_transactions.put(tr);
+      generated_transactions.put(tr);
 
       // tr = new( RD_WONE_DELAY, WR_WONE_DELAY, TR_OF_MAX_LENGTH );
-      // this.generated_transactions.put(tr);
+      // generated_transactions.put(tr);
 
       tr = new( RD_WOUT_DELAY, WR_WOUT_DELAY, TR_OF_MAX_LENGTH );
-      this.generated_transactions.put(tr);
+      generated_transactions.put(tr);
 
       tr = new( RD_WONE_DELAY, WR_WONE_DELAY, TR_OF_MAX_LENGTH );
-      this.generated_transactions.put(tr);  
+      generated_transactions.put(tr);  
 
       tr = new( RD_WOUT_DELAY, WR_WOUT_DELAY, TR_OF_ONE_LENGTH, .write_after_read(1'b1) );
-      this.generated_transactions.put(tr); 
+      generated_transactions.put(tr); 
 
       // tr = new( RD_WOUT_DELAY, WR_WRND_DELAY, TR_OF_MAX_LENGTH );
-      // this.generated_transactions.put(tr);
+      // generated_transactions.put(tr);
 
       // tr = new( RD_WRND_DELAY, WR_WOUT_DELAY, TR_OF_MAX_LENGTH );
-      // this.generated_transactions.put(tr);
+      // generated_transactions.put(tr);
 
       // tr = new( RD_WOUT_DELAY, WR_WOUT_DELAY, TR_OF_ONE_LENGTH );
-      // this.generated_transactions.put(tr);
+      // generated_transactions.put(tr);
 
     endtask
 
@@ -525,18 +535,22 @@ module top_tb;
 
     mailbox #( Transaction ) generated_tansactions;
 
-    event     transaction_started; 
+    virtual lifo_interface   vif;
 
-    Generator generator;
-    Driver    driver;
-    Monitor   monitor;
+    event                    transaction_started; 
 
-    function new;
+    Generator                generator;
+    Driver                   driver;
+    Monitor                  monitor;
+
+    function new( input virtual lifo_interface dut_interface );
       generated_tansactions = new();
 
+      vif                   = dut_interface;
+
       generator             = new( generated_tansactions ); 
-      driver                = new( generated_tansactions, transaction_started );
-      monitor               = new( transaction_started );
+      driver                = new( generated_tansactions, transaction_started, vif );
+      monitor               = new( transaction_started, vif );
 
     endfunction
 
@@ -556,11 +570,11 @@ module top_tb;
   initial
     begin
       Environment env;
-      env   = new();
+      env           = new( lifo_if );
 
-      data  = '0;
-      wrreq = 1'b0;
-      rdreq = 1'b0;
+      lifo_if.data  = '0;
+      lifo_if.wrreq = 1'b0;
+      lifo_if.rdreq = 1'b0;
 
       wait( srst_done );   
 
