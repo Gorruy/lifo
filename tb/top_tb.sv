@@ -1,21 +1,22 @@
 module top_tb;
 
   parameter NUMBER_OF_TEST_RUNS = 1;
-  parameter TIMEOUT             = 1000;
+  parameter TIMEOUT             = 100;
   parameter TR_OVERHEAD         = 4;
   parameter MAX_RND_DELAY       = 100;
   parameter MIN_RND_DELAY       = 0;
 
   parameter DWIDTH              = 16;
-  parameter AWIDTH              = 4;
+  parameter AWIDTH              = 8;
   parameter ALMOST_FULL         = 2;
   parameter ALMOST_EMPTY        = 2;
 
-  parameter ERROR_LIMITS_USEDW  = 10;
-  parameter ERROR_LIMITS_EMPTY  = 10;
-  parameter ERROR_LIMITS_FULL   = 10;
-  parameter ERROR_LIMITS_ALMF   = 10;
-  parameter ERROR_LIMITS_ALME   = 10;
+  parameter ERROR_LIMITS_USEDW  = 1;
+  parameter ERROR_LIMITS_EMPTY  = 1;
+  parameter ERROR_LIMITS_FULL   = 1;
+  parameter ERROR_LIMITS_ALMF   = 1;
+  parameter ERROR_LIMITS_ALME   = 1;
+  parameter ERROR_LIMITS_READ   = 1;
 
   bit                  clk;
   logic                srst;
@@ -87,7 +88,8 @@ module top_tb;
   class Transaction;
   // This class represents whole transaction:
   // data in it, delays between requests and flag
-  // that tells driver if we should make lifo full before start reading
+  // that tells driver if we should make lifo full before start reading or
+  // write over limits and only then start reading
     
     data_t  data;
     delay_t rd_delays;
@@ -112,9 +114,9 @@ module top_tb;
       this.read_after_full  = read_after_full;
       this.read_after_write = read_after_write;
       
-      this.data            = {};
-      this.rd_delays       = {};
-      this.wr_delays       = {}; 
+      this.data             = {};
+      this.rd_delays        = {};
+      this.wr_delays        = {}; 
 
       set_len();
       set_delays();
@@ -153,7 +155,7 @@ module top_tb;
 
         default: begin
           $display("Unknown type of length configuration!!!!");
-          $stop();
+          return;
         end
 
       endcase
@@ -187,7 +189,7 @@ module top_tb;
 
         default: begin
           $display("Unknown type of reading configuration!!!!");
-          $stop();
+          return;
         end
 
       endcase
@@ -217,7 +219,7 @@ module top_tb;
 
         default: begin
           $display("Unknown type of writing configuration!!!!");
-          $stop();
+          return;
         end
 
       endcase
@@ -244,10 +246,14 @@ module top_tb;
   // This class will drive both reading 
   // and writing commands to DUT
     mailbox #( Transaction ) generated_transactions;
+    event                    transaction_started;
     
-    function new ( input mailbox #( Transaction ) generated_transactions );
+    function new ( input mailbox #( Transaction ) generated_transactions,
+                   input event                    tr_started
+                 );
 
       this.generated_transactions = generated_transactions;
+      transaction_started         = tr_started;
 
     endfunction
 
@@ -260,8 +266,10 @@ module top_tb;
           generated_transactions.get( tr_to_send );
           tr_to_send.print();
 
+          ->transaction_started;
+
           fork
-            send(tr_to_send);
+            write(tr_to_send);
             read(tr_to_send);
           join
 
@@ -285,7 +293,7 @@ module top_tb;
 
     endtask
 
-    task send( input Transaction tr_to_send );
+    task write( input Transaction tr_to_send );
 
       while ( tr_to_send.wr_delays.size() )
         begin
@@ -306,8 +314,9 @@ module top_tb;
 
     logic [2**AWIDTH - 1:0][DWIDTH - 1:0] ref_mem;
     int                                   ref_ptr;
-    bit                                   reading_delay; // valid data appeares at q with delay of 1 clk cycle
+    bit                                   reading_delay;      // valid data appeares at q with delay of 1 clk cycle
     int                                   timeout_counter;
+    event                                 transaction_started;
 
     // These counters will restrict number of error risings
     int usedw_err_cnt;
@@ -315,26 +324,39 @@ module top_tb;
     int full_err_cnt;
     int almf_err_cnt;
     int alme_err_cnt;
+    int read_err_cnt;
 
-    function new;
+    function new( input event tr_start );
 
       ref_ptr         = '0;
       ref_mem         = '0;
       reading_delay   = '0;
       timeout_counter = 0;
-      usedw_err_cnt   = ERROR_LIMITS_USEDW;
-      empty_err_cnt   = ERROR_LIMITS_EMPTY;
-      full_err_cnt    = ERROR_LIMITS_FULL;
-      almf_err_cnt    = ERROR_LIMITS_ALMF;
-      alme_err_cnt    = ERROR_LIMITS_ALME;
+      usedw_err_cnt = ERROR_LIMITS_USEDW;
+      empty_err_cnt = ERROR_LIMITS_EMPTY;
+      full_err_cnt  = ERROR_LIMITS_FULL;
+      almf_err_cnt  = ERROR_LIMITS_ALMF;
+      alme_err_cnt  = ERROR_LIMITS_ALME;
+      read_err_cnt  = ERROR_LIMITS_READ;
+
+      transaction_started = tr_start;
 
     endfunction
 
     task run;
 
+      fork
+        check();
+        reload_counters();
+      join
+
+    endtask
+
+    task check;
+
       forever
         begin
-          ##1;
+          @( posedge clk );
           timeout_counter += 1;
 
           if ( rdreq === 1'b1 || wrreq === 1'b1 )
@@ -342,36 +364,38 @@ module top_tb;
           else if ( timeout_counter == TIMEOUT + 1 )
             $stop();
 
-          if ( usedw !== ref_ptr && usedw_err_cnt != 0 )
+          if ( usedw !== ref_ptr && usedw_err_cnt > 0 )
             begin
               raise_error("Usedw error");
               usedw_err_cnt -= 1;
             end
-          if ( usedw === '0 && empty !== 1'b1 && empty_err_cnt != 0 )
+          if ( ref_ptr === '0 && empty !== 1'b1 && empty_err_cnt > 0 )
             begin
               raise_error("Empty error");
               empty_err_cnt -= 1;
             end
-          if ( usedw === (AWIDTH + 1)'(2**AWIDTH) && full !== 1'b1 && full_err_cnt != 0 )
+          if ( ref_ptr === (AWIDTH + 1)'(2**AWIDTH) && full !== 1'b1 && full_err_cnt > 0 )
             begin
               raise_error("Full error");
               full_err_cnt -= 1;
             end
-          if ( usedw <= ALMOST_EMPTY && almost_empty !== 1'b1 && almf_err_cnt != 0 )
+          if ( ref_ptr <= ALMOST_EMPTY && almost_empty !== 1'b1 && almf_err_cnt > 0 )
             begin
               raise_error("Almost empty error");
               almf_err_cnt -= 1;
             end
-          if ( usedw >= ALMOST_FULL && almost_full !== 1'b1 && alme_err_cnt != 0 )
+          if ( ref_ptr >= ALMOST_FULL && almost_full !== 1'b1 && alme_err_cnt > 0 )
             begin
               raise_error("Almost full error");
               alme_err_cnt -= 1;
             end
-
           if ( reading_delay )
             begin
-              if ( ref_mem[ref_ptr] !== q )
-                raise_error("Wrong read");
+              if ( ref_mem[ref_ptr] !== q && read_err_cnt > 0 )
+                begin
+                  raise_error("Wrong read");
+                  read_err_cnt -= 1;
+                end
             end
 
           if ( rdreq === 1'b1 && wrreq === 1'b1 && ref_ptr != 2**AWIDTH && ref_ptr != -1 )
@@ -392,6 +416,23 @@ module top_tb;
             end 
           else 
             reading_delay = 1'b0;
+        end
+
+    endtask
+
+    task reload_counters;
+      forever
+        begin
+          ##1;
+          wait ( transaction_started.triggered )
+            begin
+              usedw_err_cnt = ERROR_LIMITS_USEDW;
+              empty_err_cnt = ERROR_LIMITS_EMPTY;
+              full_err_cnt  = ERROR_LIMITS_FULL;
+              almf_err_cnt  = ERROR_LIMITS_ALMF;
+              alme_err_cnt  = ERROR_LIMITS_ALME;
+              read_err_cnt  = ERROR_LIMITS_READ;
+            end
         end
 
     endtask
@@ -452,7 +493,9 @@ module top_tb;
   class Environment;
   // This class will hold all parts of tb
 
-    mailbox #( Transaction ) generated_tansactions; 
+    mailbox #( Transaction ) generated_tansactions;
+
+    event     transaction_started; 
 
     Generator generator;
     Driver    driver;
@@ -462,8 +505,8 @@ module top_tb;
       generated_tansactions = new();
 
       generator             = new( generated_tansactions ); 
-      driver                = new( generated_tansactions );
-      monitor               = new();
+      driver                = new( generated_tansactions, transaction_started );
+      monitor               = new( transaction_started );
 
     endfunction
 
